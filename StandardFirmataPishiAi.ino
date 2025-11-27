@@ -21,11 +21,120 @@
   See file LICENSE.txt for further informations on licensing terms.
 
   Last updated August 17th, 2017
+  
+  ============================================================================
+  MODIFICATION: Multi-Serial Support for BLE/Wireless Modules
+  ============================================================================
+  
+  Modified by: Pishi.ai Team
+  Website: https://pishi.ai
+  Help & Documentation: https://pishi.ai/help
+  
+  This enhanced version adds flexible multi-serial communication support:
+  - SoftwareSerial on pins 4 (RX) & 7 (TX) for BLE modules (HC-05/06, HM-10)
+  - Dual-channel auto-switching between USB and wireless connections
+  - Support for boards with multiple hardware serial ports (Mega, Leonardo, Due)
+  - Full backward compatibility with original StandardFirmata
+  
+  For setup guides and troubleshooting, visit: https://pishi.ai/help
+  
+  CONFIGURATION:
+  --------------
+  Set SERIAL_MODE to one of the following values:
+  
+  Mode 0: Hardware Serial only (default UART)
+          - Original StandardFirmata behavior
+          - Uses built-in USB/UART pins
+          - Best for direct USB connection
+  
+  Mode 1: SoftwareSerial only (pins 4 & 7) 
+          - Pin 4: RX (connect to TX of BLE/serial module)
+          - Pin 7: TX (connect to RX of BLE/serial module)
+          - Use this mode when communicating through external modules
+          - Hardware Serial remains unused (can optionally use for debug)
+  
+  Mode 2: Both Hardware Serial and SoftwareSerial
+          - Primary: SoftwareSerial on pins 4 & 7
+          - Secondary: Hardware Serial (backup channel)
+          - Allows simultaneous connections
+          - Data from hardware Serial is forwarded to SoftwareSerial
+  
+  Mode 3: Dual Hardware Serial (Serial + Serial1/2/3)
+          - For boards with multiple hardware serial ports
+          - Supported boards: Mega (Serial1/2/3), Leonardo/Due/Zero (Serial1)
+          - Serial (USB) is always primary
+          - Set HARDWARE_SERIAL_PORT_NUMBER to choose secondary UART:
+            1 = Serial1 (default) - available on Mega, Leonardo, Due, Zero
+            2 = Serial2 - Mega only (pins 16/17)
+            3 = Serial3 - Mega only (pins 14/15)
+          - Auto-switches between ports based on activity
+          - Best performance with two hardware serial connections
+  
+  WIRING for BLE/Serial Modules (Mode 1 or 2):
+  ---------------------------------------------
+  Arduino Pin 4 (RX) --> TX of BLE/Serial module
+  Arduino Pin 7 (TX) --> RX of BLE/Serial module
+  GND               --> GND of BLE/Serial module
+  VCC (3.3V or 5V)  --> VCC of BLE/Serial module (check module voltage!)
+  
+  NOTES:
+  ------
+  - SoftwareSerial maximum reliable baud rate is typically 57600
+  - Ensure BLE/Serial module is configured to 57600 baud
+  - For HC-05/06, configure with AT commands before use
+  - Some modules require 3.3V logic level - use level shifters if needed
+  
 */
 
 #include <Servo.h>
 #include <Wire.h>
 #include <Firmata.h>
+#include <SoftwareSerial.h>
+
+// ============================================================================
+// SERIAL COMMUNICATION CONFIGURATION
+// ============================================================================
+
+// Serial Mode Selection: Choose how Firmata communicates with the host
+// Mode 0: Hardware Serial only (USB) - Original StandardFirmata behavior
+// Mode 1: SoftwareSerial only (pins 4 & 7) - For BLE/wireless modules
+// Mode 2: Dual channel (Hardware + Software) - Auto-switching between USB and BLE
+// Mode 3: Dual Hardware Serial (Serial + Serial1/2/3) - For multi-UART boards
+#define SERIAL_MODE 2
+
+// Baud Rate Configuration
+// Note: Different baud rates per channel in Mode 2 & 3 (e.g., 57600 for USB, 9600 for BLE)
+#define HARDWARE_SERIAL_BAUD_RATE 57600  // For Serial (USB/UART0)
+#define SOFTWARE_SERIAL_BAUD_RATE 9600   // For SoftwareSerial (BLE modules on pins 4 & 7)
+                                         // Note: 9600 is default for HC-05/HC-06/HM-10 BLE modules
+                                         // Increase to 57600 after configuring module for best performance
+
+// Mode 3 Configuration: Select which hardware UART to use as secondary port
+// Options: 1 = Serial1 (Mega/Leonardo/Due/Zero, pins vary by board)
+//          2 = Serial2 (Mega only, pins 16 RX / 17 TX)
+//          3 = Serial3 (Mega only, pins 14 RX / 15 TX)
+// Note: Serial (USB) is always the primary port in Mode 3
+#define HARDWARE_SERIAL_PORT_NUMBER 1              // Which Serial port: 1=Serial1, 2=Serial2, 3=Serial3
+#define HARDWARE_SERIAL_SECONDARY_BAUD_RATE 9600  // Baud rate for Serial1/2/3
+
+// SoftwareSerial Pin Configuration (for Mode 1 & 2)
+#define SW_SERIAL_RX_PIN 4  // Arduino RX pin (connect to BLE module TX)
+#define SW_SERIAL_TX_PIN 7  // Arduino TX pin (connect to BLE module RX)
+
+// Enable SoftwareSerial if mode is 1 or 2
+#if (SERIAL_MODE == 1) || (SERIAL_MODE == 2)
+#define USE_SOFTWARE_SERIAL
+#endif
+
+// Enable hardware Serial if mode is 0 or 2
+#if (SERIAL_MODE == 0) || (SERIAL_MODE == 2)
+#define USE_HARDWARE_SERIAL
+#endif
+
+// Enable dual hardware Serial if mode is 3
+#if SERIAL_MODE == 3
+#define USE_DUAL_HARDWARE_SERIAL
+#endif
 
 #define I2C_WRITE                   B00000000
 #define I2C_READ                    B00001000
@@ -46,6 +155,203 @@
 /*==============================================================================
  * GLOBAL VARIABLES
  *============================================================================*/
+
+// SoftwareSerial instance for pins 4 and 7
+#ifdef USE_SOFTWARE_SERIAL
+SoftwareSerial swSerial(SW_SERIAL_RX_PIN, SW_SERIAL_TX_PIN);
+#endif
+
+// Dual Serial wrapper for Mode 2 - auto-switches between Serial and SoftwareSerial
+#if SERIAL_MODE == 2
+class DualSerial : public Stream {
+  private:
+    Stream* activeStream;
+    unsigned long lastActivityTime;
+    static const unsigned long SWITCH_TIMEOUT = 1000; // 1 second of inactivity before allowing switch
+    
+  public:
+    DualSerial() : activeStream(nullptr), lastActivityTime(0) {}
+    
+    void begin(long baud1, long baud2) {
+      Serial.begin(baud1);
+      swSerial.begin(baud2);
+      activeStream = nullptr; // Will auto-detect on first read
+      lastActivityTime = 0;
+    }
+    
+    void flush() {
+      // Clear buffers from inactive stream only
+      if (activeStream == &Serial && swSerial.available()) {
+        while (swSerial.available()) swSerial.read();
+      } else if (activeStream == &swSerial && Serial.available()) {
+        while (Serial.available()) Serial.read();
+      }
+    }
+    
+    int available() {
+      // Auto-detect active stream based on which has data
+      if (activeStream == nullptr) {
+        // First connection - check which stream has data
+        if (Serial.available() > 0) {
+          activeStream = &Serial;
+          // Flush SoftwareSerial
+          while (swSerial.available()) swSerial.read();
+        } else if (swSerial.available() > 0) {
+          activeStream = &swSerial;
+          // Flush Hardware Serial
+          while (Serial.available()) Serial.read();
+        }
+      } else {
+        // Check if we should switch streams (after timeout)
+        unsigned long now = millis();
+        if (now - lastActivityTime > SWITCH_TIMEOUT) {
+          // Allow switching if the other stream has data
+          if (activeStream == &Serial && swSerial.available() > 0) {
+            activeStream = &swSerial;
+            // Flush Hardware Serial
+            while (Serial.available()) Serial.read();
+          } else if (activeStream == &swSerial && Serial.available() > 0) {
+            activeStream = &Serial;
+            // Flush SoftwareSerial
+            while (swSerial.available()) swSerial.read();
+          }
+        }
+      }
+      
+      return activeStream ? activeStream->available() : 0;
+    }
+    
+    int read() {
+      if (activeStream && activeStream->available()) {
+        lastActivityTime = millis();
+        return activeStream->read();
+      }
+      return -1;
+    }
+    
+    int peek() {
+      return activeStream ? activeStream->peek() : -1;
+    }
+    
+    size_t write(uint8_t byte) {
+      // Write only to the active stream
+      if (activeStream) {
+        return activeStream->write(byte);
+      }
+      return 0;
+    }
+};
+
+DualSerial dualSerial;
+#endif
+
+// Dual Hardware Serial wrapper for Mode 3 - auto-switches between Serial and Serial1/2/3
+#if SERIAL_MODE == 3
+class DualHardwareSerial : public Stream {
+  private:
+    Stream* activeStream;
+    Stream* secondaryStream;
+    unsigned long lastActivityTime;
+    static const unsigned long SWITCH_TIMEOUT = 1000; // 1 second of inactivity before allowing switch
+    
+    void clearBuffer(Stream* stream, uint16_t maxBytes = 256) {
+      uint16_t cleared = 0;
+      while (stream->available() && cleared < maxBytes) {
+        stream->read();
+        cleared++;
+      }
+    }
+    
+  public:
+    DualHardwareSerial() : activeStream(nullptr), secondaryStream(nullptr), lastActivityTime(0) {}
+    
+    void begin(long baudPrimary, long baudSecondary) {
+      // Serial (USB) is always primary
+      Serial.begin(baudPrimary);
+      
+      // Initialize selected secondary serial port
+      #if HARDWARE_SERIAL_PORT_NUMBER == 1
+      Serial1.begin(baudSecondary);
+      secondaryStream = &Serial1;
+      #elif HARDWARE_SERIAL_PORT_NUMBER == 2
+      Serial2.begin(baudSecondary);
+      secondaryStream = &Serial2;
+      #elif HARDWARE_SERIAL_PORT_NUMBER == 3
+      Serial3.begin(baudSecondary);
+      secondaryStream = &Serial3;
+      #else
+      #error "Invalid HARDWARE_SERIAL_PORT_NUMBER. Use 1 (Serial1), 2 (Serial2), or 3 (Serial3)"
+      #endif
+      
+      activeStream = nullptr;
+      lastActivityTime = 0;
+    }
+    
+    void flush() {
+      if (activeStream == &Serial) {
+        clearBuffer(secondaryStream);
+      } else if (activeStream == secondaryStream) {
+        clearBuffer(&Serial);
+      }
+    }
+    
+    int available() {
+      if (activeStream == nullptr) {
+        // Prioritize Serial (USB) for initial connection
+        if (Serial.available() > 0) {
+          activeStream = &Serial;
+          clearBuffer(secondaryStream);
+        } else if (secondaryStream->available() > 0) {
+          activeStream = secondaryStream;
+          clearBuffer(&Serial);
+        }
+      } else {
+        unsigned long now = millis();
+        // Handle millis() overflow
+        if (now < lastActivityTime) {
+          lastActivityTime = now;
+        }
+        
+        if (now - lastActivityTime > SWITCH_TIMEOUT) {
+          if (activeStream == &Serial && secondaryStream->available() > 0) {
+            activeStream = secondaryStream;
+            clearBuffer(&Serial);
+          } else if (activeStream == secondaryStream && Serial.available() > 0) {
+            activeStream = &Serial;
+            clearBuffer(secondaryStream);
+          }
+        }
+      }
+      
+      return activeStream ? activeStream->available() : 0;
+    }
+    
+    int read() {
+      if (activeStream && activeStream->available()) {
+        lastActivityTime = millis();
+        return activeStream->read();
+      }
+      return -1;
+    }
+    
+    int peek() {
+      return activeStream ? activeStream->peek() : -1;
+    }
+    
+    size_t write(uint8_t byte) {
+      if (activeStream) {
+        return activeStream->write(byte);
+      }
+      return 0;
+    }
+    
+    // Diagnostic methods
+    bool isSerialActive() { return activeStream == &Serial; }
+    bool isSecondaryActive() { return activeStream == secondaryStream; }
+};
+
+DualHardwareSerial dualHardwareSerial;
+#endif
 
 #ifdef FIRMATA_SERIAL_FEATURE
 SerialFirmata serialFeature;
@@ -263,6 +569,15 @@ void checkDigitalInputs(void)
  */
 void setPinModeCallback(byte pin, int mode)
 {
+  // Protect SoftwareSerial pins from being controlled by Firmata
+#if (SERIAL_MODE == 1) || (SERIAL_MODE == 2)
+  if (pin == SW_SERIAL_RX_PIN || pin == SW_SERIAL_TX_PIN) {
+    // Mark these pins as ignored and do not allow mode changes
+    Firmata.setPinMode(pin, PIN_MODE_IGNORE);
+    return;
+  }
+#endif
+
   if (Firmata.getPinMode(pin) == PIN_MODE_IGNORE)
     return;
 
@@ -723,6 +1038,15 @@ void systemResetCallback()
   }
 
   for (byte i = 0; i < TOTAL_PINS; i++) {
+    // Reserve SoftwareSerial pins and mark them as ignored
+#if (SERIAL_MODE == 1) || (SERIAL_MODE == 2)
+    if (i == SW_SERIAL_RX_PIN || i == SW_SERIAL_TX_PIN) {
+      Firmata.setPinMode(i, PIN_MODE_IGNORE);
+      servoPinMap[i] = 255;
+      continue;
+    }
+#endif
+
     // pins with analog capability default to analog input
     // otherwise, pins default to digital output
     if (IS_PIN_ANALOG(i)) {
@@ -766,16 +1090,45 @@ void setup()
   Firmata.attach(START_SYSEX, sysexCallback);
   Firmata.attach(SYSTEM_RESET, systemResetCallback);
 
-  // to use a port other than Serial, such as Serial1 on an Arduino Leonardo or Mega,
-  // Call begin(baud) on the alternate serial port and pass it to Firmata to begin like this:
-  // Serial1.begin(57600);
-  // Firmata.begin(Serial1);
-  // However do not do this if you are using SERIAL_MESSAGE
-
-  Firmata.begin(57600);
+  // Initialize serial communication based on SERIAL_MODE
+#if SERIAL_MODE == 0
+  // Mode 0: Hardware Serial only (default behavior)
+  Firmata.begin(HARDWARE_SERIAL_BAUD_RATE);
   while (!Serial) {
     ; // wait for serial port to connect. Needed for ATmega32u4-based boards and Arduino 101
   }
+  
+#elif SERIAL_MODE == 1
+  // Mode 1: SoftwareSerial only on pins 4 (RX) and 5 (TX) for BLE/Serial modules
+  swSerial.begin(SOFTWARE_SERIAL_BAUD_RATE);
+  Firmata.begin(swSerial);
+  
+  // Optional: Use hardware Serial for debugging at a different baud rate
+  // Serial.begin(9600);
+  // Serial.println("Firmata: Using SoftwareSerial on pins 4(RX) & 7(TX)");
+  
+#elif SERIAL_MODE == 2
+  // Mode 2: Both hardware Serial and SoftwareSerial simultaneously
+  // Use DualSerial wrapper to write to both channels
+  dualSerial.begin(HARDWARE_SERIAL_BAUD_RATE, SOFTWARE_SERIAL_BAUD_RATE);
+  while (!Serial) {
+    ; // wait for serial port to connect
+  }
+  Firmata.begin(dualSerial);
+  
+#elif SERIAL_MODE == 3
+  // Mode 3: Dual Hardware Serial (Serial + Serial1/2/3) with auto-switching
+  // For boards with multiple hardware serial ports (Mega, Leonardo, Due, etc.)
+  // Serial (USB) is primary, HARDWARE_SERIAL_PORT_NUMBER selects which UART is secondary
+  dualHardwareSerial.begin(HARDWARE_SERIAL_BAUD_RATE, HARDWARE_SERIAL_SECONDARY_BAUD_RATE);
+  while (!Serial) {
+    ; // wait for serial port to connect
+  }
+  Firmata.begin(dualHardwareSerial);
+  
+#else
+  #error "Invalid SERIAL_MODE. Use 0 (Hardware Serial), 1 (SoftwareSerial), 2 (Both), or 3 (Dual Hardware Serial)"
+#endif
 
   systemResetCallback();  // reset to default config
 }
