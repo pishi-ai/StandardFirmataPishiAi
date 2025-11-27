@@ -1,5 +1,7 @@
 # StandardFirmataPishiAi
 
+> Note: External issues and pull requests are not accepted. Forks are welcome under LGPL-2.1. For any support or security inquiry email `info@pishi.ai`.
+
 Enhanced StandardFirmata by Pishi.ai enabling Arduino to connect to Scratch via either USB (WebSerial) or external BLE-UART/Serial modules (WebBluetooth/WebSerial). Ideal for Uno/Nano/Mega/Leonardo/Due/Zero and projects needing flexible wired/wireless serial.
 
 ## Overview

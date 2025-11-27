@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Pishi.ai Support & Security
+    url: mailto:info@pishi.ai
+    about: This repository does not accept issues or PRs. Email for any inquiry.

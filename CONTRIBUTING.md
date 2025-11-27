@@ -1,24 +1,20 @@
 # Contributing
 
-Thank you for considering contributing! Please follow these guidelines:
+Project status: locked-down. We do not accept external contributions (issues or pull requests) at this time.
 
-- Open an issue to discuss major changes before submitting a PR.
-- Keep changes focused and documented in the PR description.
-- Ensure code compiles on common Arduino boards (Uno, Nano, Mega, Leonardo).
-- Maintain LGPL-2.1 license headers where applicable.
-- Test serial modes (0–3) relevant to your change.
+Why: This firmware is closely tied to internal testing, release cadence, and support boundaries. To preserve reliability for our users, all changes are made by the Pishi.ai maintainers only.
 
-## Development Workflow
+What you can do:
+- Forks: You are welcome to fork and modify under the terms of the LGPL-2.1 license.
+- Bug reports / questions: Please contact support instead of opening issues.
 
-1. Fork the repo and create a branch: `feature/your-change`
-2. Make changes and test on hardware
-3. Run a basic style check or formatting where possible
-4. Submit a Pull Request with a clear summary and test notes
+Not accepted:
+- Pull requests from outside the maintainer team
+- GitHub Issues in this repository
 
-## Reporting Issues
+Contact
+- Support & security: info@pishi.ai (please provide steps to reproduce, affected boards, serial mode)
 
-Include:
-- Board model and wiring
-- Serial mode and baud rates
-- Steps to reproduce
-- Expected vs actual behavior
+Note for collaborators within the organization
+- Changes must be proposed internally and merged by code owners only.
+- Follow internal release notes and hardware verification steps before tagging a release.
