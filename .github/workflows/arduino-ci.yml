@@ -1,0 +1,58 @@
+name: Arduino CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Arduino CLI
+        uses: arduino/setup-arduino-cli@v1
+        with:
+          version: latest
+
+      - name: Initialize Arduino CLI
+        run: |
+          arduino-cli config init --additional-urls "https://downloads.arduino.cc/packages/package_index.json"
+          arduino-cli core update-index
+          arduino-cli core install arduino:avr
+          arduino-cli core install arduino:sam
+
+      - name: Prepare library
+        run: |
+          echo "Preparing library layout"
+          # The workflow runs from repo root; ensure arduino-cli sees the sketch
+          mkdir -p libraries/StandardFirmataPishiAi
+          cp -R packages/scratch-vm/_codes_excluded_from_build/docs/StandardFirmataPishiAi/* libraries/StandardFirmataPishiAi/
+
+      - name: Compile for Uno (avr)
+        run: |
+          arduino-cli compile \
+            --fqbn arduino:avr:uno \
+            libraries/StandardFirmataPishiAi
+
+      - name: Compile for Mega 2560 (avr)
+        run: |
+          arduino-cli compile \
+            --fqbn arduino:avr:mega \
+            libraries/StandardFirmataPishiAi
+
+      - name: Compile for Leonardo (avr)
+        run: |
+          arduino-cli compile \
+            --fqbn arduino:avr:leonardo \
+            libraries/StandardFirmataPishiAi
+
+      - name: Compile example (MinimalDualMode) for Uno
+        run: |
+          arduino-cli compile \
+            --fqbn arduino:avr:uno \
+            libraries/StandardFirmataPishiAi/examples/MinimalDualMode
